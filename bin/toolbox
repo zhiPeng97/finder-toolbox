@@ -1,0 +1,372 @@
+#!/bin/bash
+# bin/toolbox — Finder 工具箱命令行入口
+# 用法：
+#   toolbox entry [--group new|dev|fs] [--no-stdin] [路径…]
+#   toolbox action <id> [路径…]
+#   toolbox selftest
+#   toolbox version
+
+TOOLBOX_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+. "$TOOLBOX_DIR/lib/common.sh"
+. "$TOOLBOX_DIR/lib/paths.sh"
+. "$TOOLBOX_DIR/lib/menu.sh"
+. "$TOOLBOX_DIR/lib/act_newfile.sh"
+. "$TOOLBOX_DIR/lib/act_open.sh"
+. "$TOOLBOX_DIR/lib/act_filemgmt.sh"
+. "$TOOLBOX_DIR/lib/dispatch.sh"
+. "$TOOLBOX_DIR/lib/extension.sh"
+
+# 开发态（未安装）回退：直接用源码树里的模板与编译产物
+[ -d "$FT_TEMPLATES" ] || FT_TEMPLATES="$TOOLBOX_DIR/templates"
+if [ ! -x "$FT_HELPER" ] && [ -x "$TOOLBOX_DIR/build/ToolboxMenu.app/Contents/MacOS/ToolboxMenu" ]; then
+    FT_HELPER="$TOOLBOX_DIR/build/ToolboxMenu.app/Contents/MacOS/ToolboxMenu"
+fi
+
+usage() {
+    "$FT_CAT" <<'EOF'
+Finder 工具箱 V1.1
+
+用法：
+  toolbox entry [--group new|dev|fs] [--no-stdin] [路径…]
+                                  弹出菜单并执行所选动作（不带 --group 时显示全部分组）
+  toolbox action <动作id> [路径…]  直接执行动作（便于测试）
+  toolbox selftest                 环境自检
+  toolbox version                  版本号
+
+动作 id：
+  new:md new:txt new:json new:js new:vue new:css new:html
+  dev:vscode dev:hbuilderx dev:copy
+  fs:zip fs:unzip fs:toggle fs:reveal
+EOF
+}
+
+# gather_paths <allow_stdin> [路径…]
+gather_paths() {
+    local allow_stdin="$1"
+    shift
+    FT_PATHS=()
+    local p
+    for p in "$@"; do
+        [ -n "$p" ] && FT_PATHS+=("$p")
+    done
+    # Quick Action 可能以「换行分隔的路径」从 stdin 传入；-t 1 防止无输入时挂死
+    if [ "${#FT_PATHS[@]}" -eq 0 ] && [ "$allow_stdin" = "1" ] && [ ! -t 0 ]; then
+        while IFS= read -r -t 1 p; do
+            [ -n "$p" ] && FT_PATHS+=("$p")
+        done
+    fi
+}
+
+osa_choose() {
+    local prompt="$1" title="$2"
+    shift 2
+    local item list="" script out
+    for item in "$@"; do
+        item=${item//\"/\\\"}
+        list="$list\"$item\", "
+    done
+    list="{${list%, }}"
+
+    [ -d "${TMPDIR:-/tmp}" ] || TMPDIR=/tmp
+    script="$TMPDIR/finder-toolbox-choose.$$.applescript"
+    "$FT_CAT" >"$script" <<EOF
+set theItems to ${list}
+set theChoice to choose from list theItems with prompt "${prompt}" with title "${title}" without multiple selections allowed
+if theChoice is false then
+	return "__FT_CANCEL__"
+end if
+return item 1 of theChoice
+EOF
+    out=$("$FT_OSASCRIPT" "$script" 2>/dev/null)
+    "$FT_RM" -f "$script"
+    printf '%s' "$out"
+}
+
+# 降级 UI：两步列表对话框，返回 0=已选 2=取消 3=失败
+menu_via_osascript() {
+    local spec="$1" line kind a b c d e
+    local gkeys=() gtitles=()
+
+    while IFS='|' read -r kind a b c d e; do
+        if [ "$kind" = "G" ]; then
+            gkeys+=("$a")
+            gtitles+=("$b")
+        fi
+    done <<<"$spec"
+    [ "${#gkeys[@]}" -gt 0 ] || return 3
+
+    local cat
+    cat=$(osa_choose "请选择分类" "$FT_APP_TITLE" ${gtitles[@]+"${gtitles[@]}"})
+    [ "$cat" = "__FT_CANCEL__" ] && return 2
+    [ -z "$cat" ] && return 3
+
+    local gkey="" i
+    for i in "${!gtitles[@]}"; do
+        if [ "${gtitles[$i]}" = "$cat" ]; then
+            gkey="${gkeys[$i]}"
+            break
+        fi
+    done
+    [ -n "$gkey" ] || return 3
+
+    local ids=() titles=()
+    while IFS='|' read -r kind a b c d e; do
+        if [ "$kind" = "I" ] && [ "$a" = "$gkey" ] && [ "$e" = "1" ]; then
+            ids+=("$b")
+            titles+=("$c")
+        fi
+    done <<<"$spec"
+    [ "${#ids[@]}" -gt 0 ] || return 3
+
+    local choice
+    choice=$(osa_choose "请选择操作" "$cat" ${titles[@]+"${titles[@]}"})
+    [ "$choice" = "__FT_CANCEL__" ] && return 2
+    for i in "${!titles[@]}"; do
+        if [ "${titles[$i]}" = "$choice" ]; then
+            printf '%s' "${ids[$i]}"
+            return 0
+        fi
+    done
+    return 3
+}
+
+# 原生菜单：0=已选 2=取消 3=未弹出（可降级） 4=弹出后异常（不降级） 5=分组为空
+menu_via_helper() {
+    local spec="$1" group="$2"
+    [ -x "$FT_HELPER" ] || return 3
+
+    local tmp pid rc i id watchdog
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/finder-toolbox.XXXXXX") || return 3
+    printf '%s\n' "$spec" >"$tmp/spec"
+
+    local args=(menu --spec "$tmp/spec" --result "$tmp/result" --shown "$tmp/shown")
+    [ -n "$group" ] && args+=(--group "$group")
+
+    "$FT_HELPER" "${args[@]}" >"$tmp/out" 2>"$tmp/err" &
+    pid=$!
+
+    i=0
+    while [ "$i" -lt $(( ${FT_MENU_START_TIMEOUT:-5} * 10 )) ]; do
+        [ -f "$tmp/shown" ] && break
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+        i=$((i + 1))
+    done
+
+    if [ ! -f "$tmp/shown" ]; then
+        kill -TERM "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null
+        rc=$?
+        ft_log "helper 未能弹出菜单(rc=$rc): $(/usr/bin/head -c 300 "$tmp/err" 2>/dev/null)"
+        "$FT_RM" -rf "$tmp"
+        [ "$rc" -eq 5 ] && return 5
+        return 3
+    fi
+
+    ( sleep "${FT_MENU_TIMEOUT:-300}"; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+    watchdog=$!
+    wait "$pid"
+    rc=$?
+    kill -TERM "$watchdog" 2>/dev/null
+
+    if [ -f "$tmp/result" ]; then
+        id=$("$FT_CAT" "$tmp/result")
+        "$FT_RM" -rf "$tmp"
+        printf '%s' "$id"
+        return 0
+    fi
+    "$FT_RM" -rf "$tmp"
+    [ "$rc" -eq 2 ] && return 2
+    [ "$rc" -eq 5 ] && return 5
+    return 4
+}
+
+choose_action() {
+    local spec="$1" group="$2" id rc
+    if [ "${FT_FORCE_FALLBACK:-0}" != "1" ] && [ -x "$FT_HELPER" ]; then
+        id=$(menu_via_helper "$spec" "$group")
+        rc=$?
+        case "$rc" in
+            0)
+                printf '%s' "$id"
+                return 0
+                ;;
+            2) return 1 ;;
+            5) return 2 ;;
+            3) ft_log "降级为对话框菜单（原生菜单不可用）" ;;
+            *)
+                ft_log "原生菜单异常退出，本次不重试"
+                return 1
+                ;;
+        esac
+    fi
+
+    id=$(menu_via_osascript "$spec")
+    rc=$?
+    if [ "$rc" -eq 0 ] && [ -n "$id" ]; then
+        printf '%s' "$id"
+        return 0
+    fi
+    [ "$rc" -eq 2 ] && ft_log "用户取消（对话框）"
+    return 1
+}
+
+cmd_entry() {
+    local group="" no_stdin=0
+    local rest=()
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --group)
+                group="${2:-}"
+                shift 2 || shift
+                ;;
+            --group=*)
+                group="${1#--group=}"
+                shift
+                ;;
+            --no-stdin)
+                no_stdin=1
+                shift
+                ;;
+            *)
+                rest+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    case "$group" in
+        new|dev|fs) ;;
+        *) group="" ;;
+    esac
+    FT_GROUP="$group"
+
+    gather_paths "$([ "$no_stdin" = "1" ] && echo 0 || echo 1)" ${rest[@]+"${rest[@]}"}
+    ft_log "entry: group=${group:-all} ${#FT_PATHS[@]} 项"
+
+    if ! ft_lock_acquire; then
+        ft_hud "菜单已打开" "请先关闭已打开的菜单再试"
+        return 0
+    fi
+    trap 'ft_lock_release' EXIT INT TERM
+
+    local spec id
+    spec=$(build_menu_spec "$group")
+    # build_menu_spec 在命令替换中运行于子 shell，计数需在此重新统计
+    FT_ENABLED_COUNT=$(printf '%s\n' "$spec" | /usr/bin/grep -c '^I|.*|1$' || true)
+    [ -z "$FT_ENABLED_COUNT" ] && FT_ENABLED_COUNT=0
+
+    if [ "${FT_ENABLED_COUNT:-0}" -eq 0 ]; then
+        ft_lock_release
+        local hint="请在访达中选中文件或文件夹后再试。"
+        case "$group" in
+            dev) hint="「开发工具」需要先选中文件或文件夹。" ;;
+            fs) hint="「文件管理」需要先选中文件或文件夹。" ;;
+        esac
+        ft_alert "没有可执行的操作" "$hint"
+        return 0
+    fi
+
+    if ! id=$(choose_action "$spec" "$group"); then
+        ft_lock_release
+        return 0
+    fi
+    [ -z "$id" ] && {
+        ft_lock_release
+        return 0
+    }
+
+    dispatch "$id"
+    local rc=$?
+    ft_lock_release
+    return "$rc"
+}
+
+cmd_action() {
+    local id="${1:-}"
+    shift 2>/dev/null || true
+    if [ -z "$id" ]; then
+        usage
+        return 64
+    fi
+    gather_paths 1 "$@"
+    dispatch "$id"
+}
+
+cmd_selftest() {
+    local ok=0 warn=0
+    say_ok() {
+        printf '  \033[32mPASS\033[0m %s\n' "$*"
+        ok=$((ok + 1))
+    }
+    say_warn() {
+        printf '  \033[33mWARN\033[0m %s\n' "$*"
+        warn=$((warn + 1))
+    }
+
+    printf 'Finder 工具箱自检 (%s)\n' "$FT_VERSION"
+
+    [ "$("$FT_UNAME" -m)" = "arm64" ] && say_ok "架构 arm64" || say_warn "非 arm64 架构（仍可运行）"
+    [ -x "$FT_HELPER" ] && say_ok "菜单组件: $FT_HELPER" || say_warn "菜单组件缺失，将降级为对话框菜单"
+    [ -d "$FT_TEMPLATES" ] && say_ok "模板目录: $FT_TEMPLATES" || say_warn "模板目录缺失（新建文件将为空文件）"
+
+    if resolve_vscode_cli >/dev/null 2>&1; then
+        say_ok "VS Code CLI: $(resolve_vscode_cli)"
+    else
+        say_warn "未找到 VS Code（使用时会给友好提示）"
+    fi
+    [ -d "$FT_HBUILDERX_APP" ] && say_ok "HBuilderX: $FT_HBUILDERX_APP" || say_warn "未找到 HBuilderX"
+
+    if hidden_files_shown; then
+        say_ok "隐藏文件当前为「显示」"
+    else
+        say_ok "隐藏文件当前为「不显示」"
+    fi
+
+    local name service registered=0
+    if ft_ext_installed; then
+        say_ok "宿主 App: $FT_APP"
+        if ft_ext_enabled; then
+            say_ok "访达扩展已启用"
+        else
+            say_warn "访达扩展未启用（系统设置 → 通用 → 登录项与扩展 → 扩展 → 访达）"
+        fi
+    else
+        say_warn "宿主 App 未安装（请运行 install.sh）"
+    fi
+
+    for name in 新建文件 开发工具 文件管理; do
+        service="$HOME/Library/Services/$name.workflow"
+        if [ -d "$service" ]; then
+            say_warn "检测到旧版「${name}」服务，会与扩展重复：运行 install.sh 可清理"
+        fi
+    done
+
+    printf '结果：%s 项通过，%s 项提醒\n' "$ok" "$warn"
+    [ "$warn" -eq 0 ]
+}
+
+case "${1:-}" in
+    entry)
+        shift
+        cmd_entry "$@"
+        ;;
+    action)
+        shift
+        cmd_action "$@"
+        ;;
+    selftest)
+        cmd_selftest
+        ;;
+    version | --version | -v)
+        printf '%s\n' "$FT_VERSION"
+        ;;
+    actions)
+        for id in $FT_ACTION_IDS; do printf '%s\n' "$id"; done
+        ;;
+    *)
+        usage
+        exit 64
+        ;;
+esac

@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "groups": [
+    {
+      "key": "new",
+      "title": "新建文件",
+      "symbol": "square.and.pencil",
+      "items": [
+        {
+          "id": "new:md",
+          "title": "Markdown (.md)",
+          "symbol": "text.document"
+        },
+        {
+          "id": "new:txt",
+          "title": "文本文件 (.txt)",
+          "symbol": "doc.text"
+        },
+        {
+          "id": "new:json",
+          "title": "JSON 文件 (.json)",
+          "symbol": "curlybraces"
+        },
+        {
+          "id": "new:js",
+          "title": "JavaScript (.js)",
+          "symbol": "chevron.left.forwardslash.chevron.right"
+        },
+        {
+          "id": "new:vue",
+          "title": "Vue 组件 (.vue)",
+          "symbol": "square.stack.3d.up.fill"
+        },
+        {
+          "id": "new:css",
+          "title": "样式表 (.css)",
+          "symbol": "paintbrush.pointed"
+        },
+        {
+          "id": "new:html",
+          "title": "HTML 页面 (.html)",
+          "symbol": "globe"
+        }
+      ]
+    },
+    {
+      "key": "dev",
+      "title": "开发工具",
+      "symbol": "hammer",
+      "items": [
+        {
+          "id": "dev:terminal",
+          "title": "在当前位置打开终端",
+          "symbol": "terminal"
+        },
+        {
+          "id": "dev:xcode",
+          "title": "用 Xcode 打开",
+          "symbol": "hammer.fill"
+        },
+        {
+          "id": "dev:vscode",
+          "title": "用 VS Code 打开",
+          "symbol": "chevron.left.forwardslash.chevron.right"
+        },
+        {
+          "id": "dev:hbuilderx",
+          "title": "用 HBuilderX 打开",
+          "symbol": "wrench.and.screwdriver"
+        },
+        {
+          "id": "dev:copy",
+          "title": "复制绝对路径",
+          "symbol": "doc.on.doc"
+        }
+      ]
+    },
+    {
+      "key": "fs",
+      "title": "文件管理",
+      "symbol": "archivebox",
+      "items": [
+        {
+          "id": "fs:zip",
+          "title": "压缩为 ZIP",
+          "symbol": "archivebox"
+        },
+        {
+          "id": "fs:unzip",
+          "title": "解压 ZIP",
+          "symbol": "shippingbox"
+        },
+        {
+          "id": "fs:toggle",
+          "title": "显示/隐藏隐藏文件",
+          "symbol": "eye"
+        },
+        {
+          "id": "fs:reveal",
+          "title": "在 Finder 中定位",
+          "symbol": "scope"
+        }
+      ]
+    }
+  ]
+}
