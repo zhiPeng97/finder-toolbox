@@ -3,6 +3,8 @@
 macOS 访达右键工具箱：**三个一级入口 + 二级动作**，选中文件、选中文件夹、窗口空白处都能用。
 无后台常驻进程、无第三方文件管理器、无需 sudo。
 
+<img src="docs/screenshot-new-file.png" width="420" alt="右键文件夹时的菜单：新建文件 / 开发工具 / 文件管理 三个一级项，展开「新建文件」为 7 种模板">
+
 ```
 右键（文件 / 文件夹 / 空白处）
 ├─ 新建文件 ▸ Markdown / 文本 / JSON / JavaScript / Vue / CSS / HTML
@@ -83,6 +85,8 @@ pgrep -fl ToolboxFinder.appex
 
 ### 开发工具
 
+<img src="docs/screenshot-dev-tools.png" width="420" alt="开发工具子菜单：在当前位置打开终端 / 用 Xcode 打开 / 用 VS Code 打开 / 用 HBuilderX 打开 / 复制绝对路径">
+
 | 菜单项 | 行为 |
 |---|---|
 | 在当前位置打开终端 | 打开终端并 `cd` 到目标目录；多选时按去重后的目录开窗；可配置成 iTerm |
@@ -94,6 +98,8 @@ pgrep -fl ToolboxFinder.appex
 空白处右键时，只有「在当前位置打开终端」可用（其余需要选中对象）。找不到 VS Code 命令行会弹出可操作的中文提示。
 
 ### 文件管理
+
+<img src="docs/screenshot-file-ops.png" width="420" alt="文件管理子菜单：压缩为 ZIP / 解压 ZIP（未选中 zip 时置灰）/ 显示隐藏文件 / 在 Finder 中定位">
 
 | 菜单项 | 行为 |
 |---|---|
@@ -178,8 +184,9 @@ V1.1 的 3 个「服务」入口仍保留在仓库中（`services/`、`tools/bui
 ```
 finder-toolbox/
 ├── install.sh / uninstall.sh
+├── docs/                          三张菜单截图（README 用）
 ├── bin/toolbox                    CLI（action / actions / selftest / version）
-├── lib/                           common paths menu dispatch services extension act_*
+├── lib/                           common paths menu dispatch extension act_*
 ├── ui/
 │   ├── menu.json                  菜单唯一真源
 │   ├── ToolboxMenuModel.swift     菜单模型 + URL payload 编解码
